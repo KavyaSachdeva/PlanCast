@@ -1,3 +1,9 @@
+#!/usr/bin/env python3
+"""
+Google Calendar Service
+Handles Google Calendar API operations
+"""
+
 import os
 import json
 from datetime import datetime, timedelta
@@ -154,61 +160,19 @@ class GoogleCalendarService:
                 'events': events
             }
 
-        # Parse time slot (e.g., "14:00-15:00" or "2pm")
-        if '-' in time_slot:
-            start_time, end_time = time_slot.split('-')
-        else:
-            # Handle single time like "2pm"
-            start_time = time_slot
-            # Assume 1 hour duration
-            start_dt = datetime.strptime(
-                f"{date} {start_time}", "%Y-%m-%d %H:%M")
-            end_dt = start_dt + timedelta(hours=1)
-            end_time = end_dt.strftime("%H:%M")
-
+        # Parse time slot (assumes HH:MM format from smart parser)
         try:
             check_start = datetime.strptime(
-                f"{date} {start_time}", "%Y-%m-%d %H:%M")
-            check_end = datetime.strptime(
-                f"{date} {end_time}", "%Y-%m-%d %H:%M")
+                f"{date} {time_slot}", "%Y-%m-%d %H:%M")
+            # Assume 1 hour duration
+            check_end = check_start + timedelta(hours=1)
         except ValueError:
-            # Try to parse with different time formats
-            try:
-                # Handle "2pm" format
-                import re
-
-                # Convert "2pm" to "14:00"
-                time_match = re.match(r'(\d{1,2})(am|pm)', start_time.lower())
-                if time_match:
-                    hour = int(time_match.group(1))
-                    period = time_match.group(2)
-                    if period == 'pm' and hour != 12:
-                        hour += 12
-                    elif period == 'am' and hour == 12:
-                        hour = 0
-                    start_time = f"{hour:02d}:00"
-
-                time_match = re.match(r'(\d{1,2})(am|pm)', end_time.lower())
-                if time_match:
-                    hour = int(time_match.group(1))
-                    period = time_match.group(2)
-                    if period == 'pm' and hour != 12:
-                        hour += 12
-                    elif period == 'am' and hour == 12:
-                        hour = 0
-                    end_time = f"{hour:02d}:00"
-
-                check_start = datetime.strptime(
-                    f"{date} {start_time}", "%Y-%m-%d %H:%M")
-                check_end = datetime.strptime(
-                    f"{date} {end_time}", "%Y-%m-%d %H:%M")
-            except ValueError:
-                return {
-                    'date': date,
-                    'time_slot': time_slot,
-                    'available': False,
-                    'error': f'Invalid time format: {time_slot}'
-                }
+            return {
+                'date': date,
+                'time_slot': time_slot,
+                'available': False,
+                'error': f'Invalid time format: {time_slot}'
+            }
 
         # Check for conflicts
         conflicts = []

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 PlanCast - AI Calendar and Weather Assistant
-Simple CLI interface to test the basic setup
+Main entry point for the application
 """
 
 import os
@@ -49,7 +49,7 @@ def main():
     print("\n✅ Basic setup looks good!")
     print("Next steps:")
     print("1. Set up Google Calendar API credentials")
-    print("2. Get OpenWeatherMap API key")
+    print("2. Get WeatherAPI.com API key")
     print("3. Create .env file from env.example")
     print("4. Run: python agent_test.py")
 

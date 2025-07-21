@@ -6,138 +6,20 @@ Tools for calendar and weather operations
 
 from langchain.tools import Tool
 from typing import List, Dict
-from datetime import datetime, timedelta
 import re
 from services.calendar import GoogleCalendarService
 from services.weather import WeatherService
+from utils.time_parser import SmartTimeParser
 
 
 class PlanCastTools:
-    def __init__(self):
+    def __init__(self, llm=None):
         """Initialize PlanCast tools"""
         self.calendar_service = GoogleCalendarService()
         self.weather_service = WeatherService()
+        self.time_parser = SmartTimeParser(llm)
         self.tools = self._create_tools()
-
-    def _parse_date(self, date_str: str) -> str:
-        """Parse natural language dates to YYYY-MM-DD format"""
-        if not date_str:
-            return None
-
-        date_str = date_str.strip().lower()
-
-        today = datetime.now()
-
-        if date_str == 'today':
-            return today.strftime('%Y-%m-%d')
-        elif date_str == 'tomorrow':
-            return (today + timedelta(days=1)).strftime('%Y-%m-%d')
-        elif date_str == 'yesterday':
-            return (today - timedelta(days=1)).strftime('%Y-%m-%d')
-        elif date_str in ['upcoming', 'this week', 'next week']:
-            return None  # Let the service handle upcoming events
-        elif date_str in ['monday', 'mon']:
-            # Find next Monday
-            days_ahead = (0 - today.weekday()) % 7
-            if days_ahead == 0:  # Today is Monday
-                days_ahead = 7
-            return (today + timedelta(days=days_ahead)).strftime('%Y-%m-%d')
-        elif date_str in ['tuesday', 'tue']:
-            # Find next Tuesday
-            days_ahead = (1 - today.weekday()) % 7
-            if days_ahead == 0:  # Today is Tuesday
-                days_ahead = 7
-            return (today + timedelta(days=days_ahead)).strftime('%Y-%m-%d')
-        elif date_str in ['wednesday', 'wed']:
-            # Find next Wednesday
-            days_ahead = (2 - today.weekday()) % 7
-            if days_ahead == 0:  # Today is Wednesday
-                days_ahead = 7
-            return (today + timedelta(days=days_ahead)).strftime('%Y-%m-%d')
-        elif date_str in ['thursday', 'thu']:
-            # Find next Thursday
-            days_ahead = (3 - today.weekday()) % 7
-            if days_ahead == 0:  # Today is Thursday
-                days_ahead = 7
-            return (today + timedelta(days=days_ahead)).strftime('%Y-%m-%d')
-        elif date_str in ['friday', 'fri']:
-            # Find next Friday
-            days_ahead = (4 - today.weekday()) % 7
-            if days_ahead == 0:  # Today is Friday
-                days_ahead = 7
-            return (today + timedelta(days=days_ahead)).strftime('%Y-%m-%d')
-        elif date_str in ['saturday', 'sat']:
-            # Find next Saturday
-            days_ahead = (5 - today.weekday()) % 7
-            if days_ahead == 0:  # Today is Saturday
-                days_ahead = 7
-            return (today + timedelta(days=days_ahead)).strftime('%Y-%m-%d')
-        elif date_str in ['sunday', 'sun']:
-            # Find next Sunday
-            days_ahead = (6 - today.weekday()) % 7
-            if days_ahead == 0:  # Today is Sunday
-                days_ahead = 7
-            return (today + timedelta(days=days_ahead)).strftime('%Y-%m-%d')
-        else:
-            # Try to parse as YYYY-MM-DD
-            try:
-                datetime.strptime(date_str, '%Y-%m-%d')
-                return date_str
-            except ValueError:
-                # Try other common formats
-                try:
-                    # MM/DD/YYYY
-                    dt = datetime.strptime(date_str, '%m/%d/%Y')
-                    return dt.strftime('%Y-%m-%d')
-                except ValueError:
-                    try:
-                        # MM-DD-YYYY
-                        dt = datetime.strptime(date_str, '%m-%d-%Y')
-                        return dt.strftime('%Y-%m-%d')
-                    except ValueError:
-                        return None
-
-    def _parse_time(self, time_str: str) -> str:
-        """Parse time strings to HH:MM format"""
-        if not time_str:
-            return None
-
-        time_str = time_str.strip().lower()
-
-        # Handle "2pm", "3:30pm" format
-        time_match = re.match(r'(\d{1,2})(?::(\d{2}))?(am|pm)', time_str)
-        if time_match:
-            hour = int(time_match.group(1))
-            minute = int(time_match.group(2)) if time_match.group(2) else 0
-            period = time_match.group(3)
-
-            if period == 'pm' and hour != 12:
-                hour += 12
-            elif period == 'am' and hour == 12:
-                hour = 0
-
-            return f"{hour:02d}:{minute:02d}"
-
-        # Handle "14:00" format
-        time_match = re.match(r'(\d{1,2}):(\d{2})', time_str)
-        if time_match:
-            hour = int(time_match.group(1))
-            minute = int(time_match.group(2))
-            return f"{hour:02d}:{minute:02d}"
-
-        # Handle "1400" format
-        time_match = re.match(r'(\d{2})(\d{2})', time_str)
-        if time_match:
-            hour = int(time_match.group(1))
-            minute = int(time_match.group(2))
-            return f"{hour:02d}:{minute:02d}"
-
-        # Handle PST/PDT timezone specifications
-        if 'pst' in time_str or 'pdt' in time_str:
-            # Keep the timezone info for the calendar service to handle
-            return time_str
-
-        return None
+        self._last_event_creation = None  # Simple cache to prevent duplicates
 
     def _clean_input(self, input_str: str) -> str:
         """Clean input string by removing quotes and extra text"""
@@ -162,38 +44,38 @@ class PlanCastTools:
             # Calendar Tools
             Tool(
                 name="get_calendar_events",
-                description="Get calendar events for a specific date or upcoming events. Use this once to get events, then respond to the user. Input should be a date like 'today', 'tomorrow', '2024-01-15', or leave empty for upcoming events.",
+                description="Get calendar events for a specific date or upcoming events. Use this to see what's scheduled. Input: date like 'today', 'tomorrow', 'next Monday', or leave empty for upcoming events. Example: 'today' or 'next Friday'",
                 func=self._get_calendar_events
             ),
 
             Tool(
                 name="create_calendar_event",
-                description="Create a new calendar event. Input should be in format: 'title|date|time|location|attendees' where time, location, and attendees are optional. Example: 'Team Meeting|today|3pm|Conference Room|john@email.com,jane@email.com'",
+                description="Create a new calendar event. Use this to schedule meetings, appointments, or events. Input format: 'title|date|time|location|attendees' where time, location, and attendees are optional. Examples: 'Team Meeting|tomorrow|2pm|Conference Room|john@email.com' or 'Lunch|Friday|12pm'",
                 func=self._create_calendar_event
             ),
 
             Tool(
                 name="check_calendar_availability",
-                description="Check if a time slot is available on a specific date. Use this once to check availability, then respond to the user. Input should be in format: 'date|time_slot' where time_slot is optional. Example: 'tomorrow|2pm' or just 'tomorrow'",
+                description="Check if a specific time slot is available on a date. Use this to see if you're free at a particular time. Input format: 'date|time' where time is optional. Examples: 'tomorrow|2pm' or 'next Thursday|3pm' or 'Friday' (for general availability). For duration requests like '3 hour slot', this will check multiple time slots.",
                 func=self._check_calendar_availability
             ),
 
             # Weather Tools
             Tool(
                 name="get_current_weather",
-                description="Get current weather for a location. Input should be a city name like 'New York', 'London', etc.",
+                description="Get current weather conditions for a location. Use this for current weather only. Input: city name like 'San Francisco', 'New York', 'London'. Example: 'San Francisco'",
                 func=self._get_current_weather
             ),
 
             Tool(
                 name="get_weather_forecast",
-                description="Get weather forecast for a specific date and location. Use this once to get forecast, then respond to the user. Input should be in format: 'location|date' where date is optional. Example: 'New York|tomorrow' or just 'New York' for current weather.",
+                description="Get weather forecast for a specific date and location. Use this for future weather planning. Input format: 'location|date' where date is optional. Examples: 'San Francisco|tomorrow' or 'New York' (for current weather)",
                 func=self._get_weather_forecast
             ),
 
             Tool(
                 name="check_weather_for_event",
-                description="Check weather for a specific event date and location. Input should be in format: 'date|location'. Example: 'tomorrow|New York'",
+                description="Check weather for a specific event date and location. Use this when planning outdoor activities or events. Input format: 'date|location'. Example: 'tomorrow|San Francisco' or 'next Saturday|Central Park'",
                 func=self._check_weather_for_event
             )
         ]
@@ -205,7 +87,7 @@ class PlanCastTools:
         try:
             # Clean and parse input
             date = self._clean_input(date)
-            parsed_date = self._parse_date(date)
+            parsed_date = self.time_parser.parse_date(date)
 
             events = self.calendar_service.get_events(parsed_date)
 
@@ -241,18 +123,30 @@ class PlanCastTools:
             date = parts[1].strip() if len(parts) > 1 else None
             time = parts[2].strip() if len(parts) > 2 else None
             location = parts[3].strip() if len(parts) > 3 else None
-            attendees = parts[4].strip().split(',') if len(
-                parts) > 4 and parts[4].strip() else None
+            attendees = parts[4].strip().split(',') if len(parts) > 4 and parts[4].strip() else None
 
             if not title or not date:
                 return "Error: Title and date are required. Format: 'title|date|time|location|attendees'"
 
             # Parse date and time
-            parsed_date = self._parse_date(date)
+            parsed_date = self.time_parser.parse_date(date)
             if not parsed_date:
                 return f"Error: Invalid date format '{date}'. Use 'today', 'tomorrow', or YYYY-MM-DD"
 
-            parsed_time = self._parse_time(time) if time else None
+            parsed_time = self.time_parser.parse_time(time) if time else None
+
+            # Check cache to prevent rapid duplicates
+            current_request = f"{title}|{parsed_date}|{parsed_time}"
+            if (self._last_event_creation and 
+                self._last_event_creation == current_request):
+                return f"⚠️ Event '{title}' was just created. No duplicate created."
+
+            # Check for existing similar events to prevent duplicates
+            existing_events = self.calendar_service.get_events(parsed_date)
+            for event in existing_events:
+                if (event['title'].lower() == title.lower() and 
+                    event['start'].startswith(parsed_date)):
+                    return f"⚠️ Event '{title}' already exists on {parsed_date}. No duplicate created."
 
             event = self.calendar_service.create_event(
                 title=title,
@@ -263,6 +157,8 @@ class PlanCastTools:
             )
 
             if event:
+                # Update cache
+                self._last_event_creation = current_request
                 return f"✅ Event created: {event['title']} on {event['start']}"
             else:
                 return "❌ Failed to create event"
@@ -282,18 +178,29 @@ class PlanCastTools:
             time_slot = parts[1].strip() if len(parts) > 1 else None
 
             # Parse date
-            parsed_date = self._parse_date(date)
+            parsed_date = self.time_parser.parse_date(date)
             if not parsed_date:
                 return f"Error: Invalid date format '{date}'. Use 'today', 'tomorrow', or YYYY-MM-DD"
 
+            # Handle time ranges like "3 hour slot"
+            if time_slot and "hour" in time_slot.lower():
+                # Extract number of hours
+                import re
+                hour_match = re.search(r'(\d+)\s*hour', time_slot.lower())
+                if hour_match:
+                    hours = int(hour_match.group(1))
+                    # Check multiple time slots throughout the day
+                    return self._check_availability_for_duration(parsed_date, hours)
+                else:
+                    time_slot = None  # Fall back to general availability
+
             # Parse time slot
             if time_slot:
-                parsed_time = self._parse_time(time_slot)
+                parsed_time = self.time_parser.parse_time(time_slot)
                 if parsed_time:
                     time_slot = parsed_time
 
-            availability = self.calendar_service.check_availability(
-                parsed_date, time_slot)
+            availability = self.calendar_service.check_availability(parsed_date, time_slot)
 
             if availability['available']:
                 result = f"✅ {date} is available"
@@ -310,6 +217,32 @@ class PlanCastTools:
 
         except Exception as e:
             return f"Error checking availability: {str(e)}"
+
+    def _check_availability_for_duration(self, date: str, hours: int) -> str:
+        """Check availability for a specific duration throughout the day"""
+        try:
+            # Check availability at different times of day
+            time_slots = ["09:00", "10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00"]
+            available_slots = []
+            
+            for time_slot in time_slots:
+                availability = self.calendar_service.check_availability(date, time_slot)
+                if availability['available']:
+                    available_slots.append(time_slot)
+            
+            if available_slots:
+                result = f"✅ {date} has {len(available_slots)} available {hours}-hour slots:\n"
+                for slot in available_slots[:5]:  # Show first 5 slots
+                    result += f"  • {slot}\n"
+                if len(available_slots) > 5:
+                    result += f"  ... and {len(available_slots) - 5} more"
+            else:
+                result = f"❌ {date} has no available {hours}-hour slots"
+            
+            return result
+            
+        except Exception as e:
+            return f"Error checking availability for duration: {str(e)}"
 
     def _get_current_weather(self, location: str) -> str:
         """Get current weather"""
@@ -337,7 +270,7 @@ class PlanCastTools:
             date = parts[1].strip() if len(parts) > 1 else None
 
             # Parse date
-            parsed_date = self._parse_date(date) if date else None
+            parsed_date = self.time_parser.parse_date(date) if date else None
 
             forecast = self.weather_service.get_weather_forecast(
                 location, parsed_date)
@@ -370,7 +303,7 @@ class PlanCastTools:
             location = parts[1].strip() if len(parts) > 1 else "New York"
 
             # Parse date
-            parsed_date = self._parse_date(date)
+            parsed_date = self.time_parser.parse_date(date)
             if not parsed_date:
                 return f"Error: Invalid date format '{date}'. Use 'today', 'tomorrow', or YYYY-MM-DD"
 
